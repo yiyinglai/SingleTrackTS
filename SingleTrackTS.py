@@ -75,6 +75,9 @@ class SingleTrackTS:
                 for s in range(0, self.num_tot):
                     self.d[t, s] = line[s]
 
+        # moves
+        self.moves = [(t, i) for t in range(0, self.num_sta - 1) for i in range(0, self.num_trn - 1)]
+
         # initial solution: same departing sequence at all tracks
         # sequence based on the departure times at the first track (location 1 d[:, 1])
         sequence = self.d[:, 1].argsort(axis=0)
@@ -89,48 +92,54 @@ class SingleTrackTS:
         self.best_A = copy.deepcopy(init_A)
         self.best_obj, self.best_departures = copy.deepcopy(init_obj), copy.deepcopy(init_departures)
 
-    def moves_and_neighbours(self):
-        """Find and return moves and neighbours of the incumbent solution.
+    def neighbour(self, move):
+        t = move[0]
+        i = move[1]
+        new_A = copy.deepcopy(self.inc_A)
+        new_A[t, i], new_A[t, i + 1] = new_A[t, i + 1], new_A[t, i]
+        return new_A
 
-        A move in a "swap" neighbours (t, i) means swapping A[t, i] and A[t, i+i]"""
-        _moves = []
-        _neighbours = []
-        # loop over tracks
-        for t in range(0, self.num_sta - 1):
-            # loop over adjacent train pairs (4 trains -> 3 adjacent pairs)
-            for i in range(0, self.num_trn - 1):
-                _A = copy.deepcopy(self.inc_A)
-                _A[t, i], _A[t, i + 1] = _A[t, i + 1], _A[t, i]
-                _moves.append((t, i))
-                _neighbours.append(_A)
-        return _moves, _neighbours
-
-    def obj_and_departures(self, A):
+    def obj_and_departures(self, A, m=None):
         """Calculate and return objective value and actual departure times based on A, d and p
 
             A[k]: sequence of train No. at track k (5 stations -> k = 4)
         """
-        departures = np.zeros(self.d.shape, dtype=np.double)
-
-        # departure times at station 0
-        for i in range(0, self.num_trn):
-            departures[i, 0] = self.d[i, 0]
-
-        # departure time at the remaining locations
-        for s in range(0, self.num_sta - 1):
-            t = 2 * s + 1
-            # a queue of trains ordered by departure times at t+1 (track) in ascending order
-            q = A[s]
-            # first train's departure times at location t (track) and location t+1 (station)
-            departures[q[0], t] = departures[q[0], t - 1] + self.p[q[0], t - 1]
-            departures[q[0], t + 1] = departures[q[0], t] + self.p[q[0], t]
-            # remaining trains' departure times at location t (track) and location t+1 (station)
-            for i in range(1, self.num_trn):
-                departures[q[i], t] = max(departures[q[i - 1], t + 1], departures[q[i], t - 1] + self.p[q[i], t - 1])
-                departures[q[i], t + 1] = departures[q[i], t] + self.p[q[i], t]
-
-        obj = np.sum(departures-self.d)
-        return obj, departures
+        if m is None:
+            departures = np.zeros(self.d.shape, dtype=np.double)
+            # departure times at station 0
+            for i in range(0, self.num_trn):
+                departures[i, 0] = self.d[i, 0]
+            # departure time at the remaining locations
+            for s in range(0, self.num_sta - 1):
+                t = 2 * s + 1
+                # a queue of trains ordered by departure times at t+1 (track) in ascending order
+                q = A[s]
+                # first train's departure times at location t (track) and location t+1 (station)
+                departures[q[0], t] = departures[q[0], t - 1] + self.p[q[0], t - 1]
+                departures[q[0], t + 1] = departures[q[0], t] + self.p[q[0], t]
+                # remaining trains' departure times at location t (track) and location t+1 (station)
+                for i in range(1, self.num_trn):
+                    departures[q[i], t] = max(departures[q[i - 1], t + 1], departures[q[i], t - 1] + self.p[q[i], t - 1])
+                    departures[q[i], t + 1] = departures[q[i], t] + self.p[q[i], t]
+            obj = np.sum(departures-self.d)
+            return obj, departures
+        else:
+            departures = copy.deepcopy(self.inc_departures)
+            # departure time at the remaining locations
+            for s in range(0, self.num_sta - 1):
+                t = 2 * s + 1
+                # a queue of trains ordered by departure times at t+1 (track) in ascending order
+                q = A[s]
+                if s >= m[0]:
+                    # first train's departure times at location t (track) and location t+1 (station)
+                    departures[q[0], t] = departures[q[0], t - 1] + self.p[q[0], t - 1]
+                    departures[q[0], t + 1] = departures[q[0], t] + self.p[q[0], t]
+                    # remaining trains' departure times at location t (track) and location t+1 (station)
+                    for i in range(1, self.num_trn):
+                        departures[q[i], t] = max(departures[q[i - 1], t + 1], departures[q[i], t - 1] + self.p[q[i], t - 1])
+                        departures[q[i], t + 1] = departures[q[i], t] + self.p[q[i], t]
+            obj = np.sum(departures-self.d)
+            return obj, departures
 
     def solve(self, verbose=False):
         """Solve the local search problem using best accept strategy."""
@@ -157,15 +166,15 @@ class SingleTrackTS:
             candidate_m = []
             candidate_A = []
             candidate_obj = []
-            moves, neighbours = self.moves_and_neighbours()
+            moves = copy.deepcopy(self.moves)
             for i in range(0, len(moves)):
                 # swapping two trains x and y for at track t if this move is not in tabu list
                 _m = moves[i]
                 if _m not in self.tabu:
                     if verbose:
                         print(moves[i], " not in tabu list", self.tabu)
-                    _A = neighbours[i]
-                    _obj, _ = self.obj_and_departures(_A)
+                    _A = self.neighbour(_m)
+                    _obj, _ = self.obj_and_departures(_A, m=_m)
                     candidate_m.append(_m)
                     candidate_A.append(_A)
                     candidate_obj.append(_obj)
@@ -233,9 +242,9 @@ class SingleTrackTS:
         # print("\n\n====Problem setup====")
         # print("Number of stations: ", self.num_sta)
         # print("Number of trains:", self.num_trn)
-        # print("\n====Result====")
-        # print("Best solution:\n", self.best_A)
-        # print("Best objective value:\n", self.best_obj)
+        print("\n====Result====")
+        print("Best solution:\n", self.best_A)
+        print("Best objective value:\n", self.best_obj)
         # print("Best departures:\n", self.best_departures)
 
         # plot evolution of objective values
@@ -250,46 +259,13 @@ class SingleTrackTS:
 
 
 if __name__ == "__main__":
-    # m_iter = 200
-    # tb_size = 15
-    #
-    # folder_location = os.getcwd() + "\mie562_instances"
-    # with xlsxwriter.Workbook('Results_Real_instances_TS_iter_'+ str(m_iter) + '_size_' + str(tb_size)+'.xlsx') as workbook:
-    #     worksheet = workbook.add_worksheet()
-    #     worksheet.write('A1', 'Instance')
-    #     worksheet.write('B1', 'Objective value')
-    #     worksheet.write('C1', 'Time to solve')
-    #     i = 1
-    #     for instance_name in os.listdir(folder_location):
-    #         i += 1
-    #         start_time = time()
-    #         ts = SingleTrackTS(folder_location, instance_name, max_iter=m_iter, tabu_size=tb_size)
-    #         ts.solve(verbose=False)
-    #         ts.display_result(plot=True)
-    #         solving_time = time() - start_time
-    #         worksheet.write('A'+str(i), instance_name)
-    #         worksheet.write('B'+str(i), getattr(ts, 'best_obj'))
-    #         worksheet.write('C'+str(i), str(solving_time))
-
-    m_iter = 200
-    tb_size = 15
-
-    folder_location = os.getcwd() + "\instances"
-    with xlsxwriter.Workbook('Results_instances_TS_iter_'+ str(m_iter) + '_size_' + str(tb_size)+'.xlsx') as workbook:
-        worksheet = workbook.add_worksheet()
-        worksheet.write('A1', 'Instance')
-        worksheet.write('B1', 'Objective value')
-        worksheet.write('C1', 'Time to solve')
-        i = 1
-        for instance_name in os.listdir(folder_location):
-            if instance_name.split("_")[0] == "5":
-                print(instance_name)
-                i += 1
-                start_time = time()
-                ts = SingleTrackTS(folder_location, instance_name, max_iter=m_iter, tabu_size=tb_size)
-                ts.solve(verbose=False)
-                ts.display_result(plot=False)
-                solving_time = time() - start_time
-                worksheet.write('A'+str(i), instance_name)
-                worksheet.write('B'+str(i), getattr(ts, 'best_obj'))
-                worksheet.write('C'+str(i), str(solving_time))
+    m_iter = 100
+    tb_size = 7
+    folder_location = os.getcwd() + "\mie562_instances"
+    instance_name = "8_12.txt"
+    ts = SingleTrackTS(folder_location, instance_name, max_iter=m_iter, tabu_size=tb_size)
+    start_time = time()
+    ts.solve(verbose=False)
+    solving_time = time() - start_time
+    ts.display_result()
+    print(solving_time)
