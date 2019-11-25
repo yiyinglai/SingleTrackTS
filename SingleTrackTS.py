@@ -285,7 +285,7 @@ if __name__ == "__main__":
     file_dirs = os.listdir(instances_path)
     results_path = os.getcwd() + r"\Final report\results"
     # noinspection SpellCheckingInspection
-    xls_name = r"\Results for (" + strategy + ',iter=' + str(m_iter) + ',size=' + str(tb_size) + ').xlsx'
+    xls_name = r"Results for (" + strategy + ',iter=' + str(m_iter) + ',size=' + str(tb_size) + ').xlsx'
 
     with xlsxwriter.Workbook(os.path.join(results_path, xls_name)) as workbook:
         worksheet = workbook.add_worksheet()
