@@ -1,22 +1,21 @@
-import numpy as np
 import copy
 import sys
 import os.path
 from tqdm import tqdm
-from time import time, sleep
+from time import time
 import matplotlib.pyplot as plt
 import xlsxwriter
+import numpy as np
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(linewidth=300)
 
 
 class SingleTrackTS:
-    """Single Track Local Search Algorithm.
-
-    It reads an instance and uses local search to find optimal schedule, with best accept strategy.
+    """Single Track tabu Search Algorithm.
+    It reads an instance and find optimal schedule using tabu search with specified strategy.
 
     Initial solution: same departing sequence at all tracks, sequence based on the departure times at the first track.
-    Neighbours: swapping adjacent trains in a departing sequence at a track.
+    Neighbours: swapping adjacent trains in a departing sequence on a track.
     Objective function: the sum of departure time delays at each location.
 
     In a 5-station-4-train instance, there is 9 locations (stations and tracks).
@@ -24,34 +23,36 @@ class SingleTrackTS:
     type        s   t   s   t   s   t   s   t   s
 
     Attributes:
-        num_sta(int): Number of stations in the instance
-        num_trn(int): Number of trains in the instance
-        num_tot(int): Number of locations
+        strategy(str): Strategy of TS, "first accept" or "best accept"
+        iter(int): Number of iterations in tabu search
+        max_iter(int): Maximum number of iteration in tabu search
+        tabu([move]): A list of moves, where a move (t, i) means swapping A[t, i] and A[t, i+1]
+        tabu_size(int): size of tabu list
+        obj_his(numpy.ndarray[float]): History of objective values at each iteration
+        num_sta(int): Number of stations of the instance
+        num_trn(int): Number of trains of the instance
+        num_tot(int): Number of locations of the instance
         p(numpy.ndarray[float]): Processing times of all trains at all locations
         d(numpy.ndarray[float]): Ideal departure times of all trains at all locations
-        inc_A(numpy.ndarray[int]): Incumbent sequences of departing trains at all tracks (5 stations -> 4 sequences)
+        inc_A(numpy.ndarray[int]): Incumbent departing sequences of trains on all tracks (5 stations -> 4 sequences)
         inc_departures(numpy.ndarray[float]): Incumbent departure times
         inc_obj(float): Incumbent objective value
-        best_A(numpy.ndarray[int]): Best sequences of departing trains at all tracks
+        best_A(numpy.ndarray[int]): Best departing sequences of trains on all tracks
         best_obj(int): Best objective value
         best_departures(numpy.ndarray[float]): Best departure times
-        iter(int): Number of iterations in local search
-        max_iter(int): Maximum number of iteration in local search
-        tabu(): Tabu list of moves
-                A move (t, i) in a "swap" neighbours means swapping A[t, i] and A[t, i+1]
-        tabu_size(int): size of tabu list
-        obj_his(numpy.ndarray[float]): History of objective values in each iteration
     """
 
-    def __init__(self, folder_loc, file_name, max_iter=500, tabu_size=8):
+    def __init__(self, folder_loc, file_name, max_iter=500, tabu_size=8, strategy="best accept"):
         """Initialize the problem by reading an instance and find initial solution"""
 
+        self.strategy = strategy
         self.iter = 0
         self.max_iter = max_iter
         self.tabu = []
         self.tabu_size = tabu_size
         self.obj_his = []
         self.filename = file_name
+        self.solving_time = None
 
         # read instance
         with open(os.path.join(folder_loc, file_name), "r") as f:
@@ -78,8 +79,8 @@ class SingleTrackTS:
         # moves
         self.moves = [(t, i) for t in range(0, self.num_sta - 1) for i in range(0, self.num_trn - 1)]
 
-        # initial solution: same departing sequence at all tracks
-        # sequence based on the departure times at the first track (location 1 d[:, 1])
+        # initial solution: same departing sequence on all tracks
+        # sequence based on the departure times on the first track (location 1 d[:, 1])
         sequence = self.d[:, 1].argsort(axis=0)
         init_A = np.repeat(np.expand_dims(sequence, axis=0), repeats=self.num_sta - 1, axis=0)
         init_obj, init_departures = self.obj_and_departures(init_A)
@@ -93,6 +94,7 @@ class SingleTrackTS:
         self.best_obj, self.best_departures = copy.deepcopy(init_obj), copy.deepcopy(init_departures)
 
     def neighbour(self, move):
+        """Return new departing sequences based on incumbent solution and move"""
         t = move[0]
         i = move[1]
         new_A = copy.deepcopy(self.inc_A)
@@ -101,9 +103,9 @@ class SingleTrackTS:
 
     def obj_and_departures(self, A, m=None):
         """Calculate and return objective value and actual departure times based on A, d and p
-
             A[k]: sequence of train No. at track k (5 stations -> k = 4)
         """
+        # this block is used for solving initial solution, when m=None
         if m is None:
             departures = np.zeros(self.d.shape, dtype=np.double)
             # departure times at station 0
@@ -123,6 +125,8 @@ class SingleTrackTS:
                     departures[q[i], t + 1] = departures[q[i], t] + self.p[q[i], t]
             obj = np.sum(departures-self.d)
             return obj, departures
+
+        # this block is for evaluating new solution, it uses incumbent information and runs faster
         else:
             departures = copy.deepcopy(self.inc_departures)
             # departure time at the remaining locations
@@ -141,131 +145,158 @@ class SingleTrackTS:
             obj = np.sum(departures-self.d)
             return obj, departures
 
-    def solve(self, verbose=False):
-        """Solve the local search problem using best accept strategy."""
-        if self.iter == 0:
-            # if verbose, print initial solution
-            if verbose:
-                print("Initial solution:")
-                print(self.inc_A)
-                print(self.inc_obj)
-                print()
-            else:
-                # if not verbose, initialize progress bar
-                pbar = tqdm(total=self.max_iter)
+    def solve(self):
+        """Solve the SingleTrack scheduling problem using tabu search with specified strategy."""
+        start_solving = time()
+        # initialize progress bar
+        pbar = tqdm(total=self.max_iter)
 
-        while self.iter < self.max_iter:
-            self.iter += 1
-            if verbose:
-                print("====Iteration", self.iter, "====")
-                print("Neighbours:")
-            else:
+        # "best accept" strategy
+        if self.strategy == "best accept":
+            while self.iter < self.max_iter:
+                self.iter += 1
                 pbar.update(1)
 
-            # list of candidate solutions (objective values and A)
-            candidate_m = []
-            candidate_A = []
-            candidate_obj = []
-            moves = copy.deepcopy(self.moves)
-            for i in range(0, len(moves)):
-                # swapping two trains x and y for at track t if this move is not in tabu list
-                _m = moves[i]
-                if _m not in self.tabu:
-                    if verbose:
-                        print(moves[i], " not in tabu list", self.tabu)
+                # list of candidate solutions (objective values and A)
+                candidate_m = []
+                candidate_A = []
+                candidate_obj = []
+                moves = copy.deepcopy(self.moves)
+
+                for i in range(0, len(moves)):
+                    # calculate obj and departures regardless of the legitimacy of the move
+                    _m = moves[i]
                     _A = self.neighbour(_m)
+                    # calculate obj and departures in a faster way
                     _obj, _ = self.obj_and_departures(_A, m=_m)
-                    candidate_m.append(_m)
-                    candidate_A.append(_A)
-                    candidate_obj.append(_obj)
-                else:
-                    if verbose:
-                        print(_m, " IS  in tabu list", self.tabu)
-                        # modification
-                        # _A = neighbours[i]
-                        # _obj, _ = self.obj_and_departures(_A)
-                        # if _obj < self.best_obj:
-                        #     candidate_m.append(_m)
-                        #     candidate_A.append(_A)
-                        #     candidate_obj.append(_obj)
-            assert len(candidate_m) == len(candidate_A) == len(candidate_obj)
+                    # if this move is not on tabu list
+                    if _m not in self.tabu:
+                        candidate_m.append(_m)
+                        candidate_A.append(_A)
+                        candidate_obj.append(_obj)
+                assert len(candidate_m) == len(candidate_A) == len(candidate_obj)
 
-            # if there is no candidates, stop solving
-            if not candidate_obj:
-                self.iter -= 1
-                if verbose:
-                    print("No move can be made")
-                    print("Tabu list:")
-                    print(self.tabu)
-                    print("Best solution:")
-                    print(self.best_A)
-                    print(self.best_obj)
-                    print()
+                # if a move can be made
+                if candidate_obj:
+                    # end of each exploration, pick a move
+                    m = candidate_m[int(np.argmin(candidate_obj))]
+                    A = candidate_A[int(np.argmin(candidate_obj))]
+                    # update tabu list
+                    self.tabu.append(m)
+                    if len(self.tabu) > self.tabu_size:
+                        self.tabu.pop(0)
+                    # update incumbent solution
+                    self.inc_A = copy.deepcopy(A)
+                    self.inc_obj, self.inc_departures = copy.deepcopy(self.obj_and_departures(A))
+                    self.obj_his.append(self.inc_obj)
+                    # update best solution
+                    if self.inc_obj <= self.best_obj:
+                        self.best_A = copy.deepcopy(self.inc_A)
+                        self.best_obj = copy.deepcopy(self.inc_obj)
+                        self.best_departures = copy.deepcopy(self.inc_departures)
+                # no move can be made (when tabu size is greater than neighbour size)
                 else:
-                    pbar.close()
-                break
-            else:
-                # pick the move, update tabu list
-                m = candidate_m[int(np.argmin(candidate_obj))]
-                A = candidate_A[int(np.argmin(candidate_obj))]
-                self.tabu.append(m)
-                if len(self.tabu) > self.tabu_size:
-                    self.tabu.pop(0)
-                # no duplicates in tabu list (no move in tabu list is made)
-                assert len(self.tabu) == len(set(self.tabu))
+                    self.iter -= 1
+                    break
 
-                # make the move, update incumbent
-                self.inc_A = copy.deepcopy(A)
-                self.inc_obj, self.inc_departures = copy.deepcopy(self.obj_and_departures(A))
+        # "first accept" strategy
+        elif self.strategy == "first accept":
+            while self.iter < self.max_iter:
+                self.iter += 1
+                pbar.update(1)
+
+                moves = copy.deepcopy(self.moves)
+                for i in range(0, len(moves)):
+                    # calculate obj and departures regardless of the legitimacy of the move
+                    _m = moves[i]
+                    _A = self.neighbour(_m)
+                    _obj, _departures = self.obj_and_departures(_A, m=_m)
+                    # if this move is not on tabu list
+                    if _m not in self.tabu:
+                        # better than incumbent solution, accept immediately and break the for loop
+                        if _obj <= self.inc_obj:
+                            self.inc_A = _A.copy()
+                            self.inc_obj = _obj.copy()
+                            self.inc_departures = _departures.copy()
+                            # update best solution
+                            if _obj <= self.best_obj:
+                                self.best_A = _A.copy()
+                                self.best_obj = _obj.copy()
+                                self.best_departures = _departures.copy()
+                            break
+                        # no better than incumbent solution, evaluate next move in the for loop
+                        else:
+                            continue
+                    # if this move is on tabu list and yields best result, accept immediately and break the for loop
+                    elif _obj <= self.best_obj:
+                        self.inc_A = _A.copy()
+                        self.inc_obj = _obj.copy()
+                        self.inc_departures = _departures.copy()
+                        # update best solution
+                        self.best_A = _A.copy()
+                        self.best_obj = _obj.copy()
+                        self.best_departures = _departures.copy()
+                        break
+                    # the move is on tabu list, and no better than best solution, evaluate next move in the for loop
+                    else:
+                        continue
+                # finished evaluating neighbours of incumbent solution, record incumbent objective value
                 self.obj_his.append(self.inc_obj)
 
-                # update best solution, best objective value and best departures
-                if self.inc_obj < self.best_obj:
-                    self.best_A = copy.deepcopy(self.inc_A)
-                    self.best_obj = copy.deepcopy(self.inc_obj)
-                    self.best_departures = copy.deepcopy(self.inc_departures)
+        # finish solving
+        self.solving_time = time() - start_solving
+        pbar.close()
 
-                if verbose:
-                    print("Move:", _m)
-                    print("Tabu list:")
-                    print(self.tabu)
-                    print("Incumbent solution:")
-                    print(self.inc_A)
-                    print(self.inc_obj)
-                    print()
-        if not verbose:
-            pbar.close()
-        sleep(0.01)
-
-    def display_result(self, plot=False):
-        """Display local search information."""
-        # print("\n\n====Problem setup====")
-        # print("Number of stations: ", self.num_sta)
-        # print("Number of trains:", self.num_trn)
+    def display_result(self):
+        """Display tabu search result and solving time."""
         print("\n====Result====")
         print("Best solution:\n", self.best_A)
+        print("Best departures:\n", self.best_departures)
         print("Best objective value:\n", self.best_obj)
-        # print("Best departures:\n", self.best_departures)
+        print("Solving time:\n", self.solving_time)
 
-        # plot evolution of objective values
-        if plot:
-            x = np.arange(self.iter, dtype=int)
-            plt.plot(x, self.obj_his)
-            plt.title(str(self.num_sta)+" stations, "+str(self.num_trn)+" trains, tabu list size: "+str(self.tabu_size))
-            plt.xlabel("Iteration")
-            plt.ylabel("Objective value")
-            plt.savefig(self.filename + "_iter_" + str(self.max_iter) + "_size_" + str(self.tabu_size) + '.png')
-            plt.clf()
+    def save_plot(self, show=False):
+        """Save the evolution of objective values in a plot."""
+        x = np.arange(self.iter, dtype=int)
+        plt.plot(x, self.obj_his)
+        plt.title(self.filename[:-4] + "(" + self.strategy +
+                  ",iter=" + str(self.max_iter) + ",size=" + str(self.tabu_size) + ")")
+        plt.xlabel("Iteration")
+        plt.ylabel("Objective value")
+        figurename = self.filename[:-4] + "(" + self.strategy + ",iter=" + str(self.max_iter) + ",size=" + str(self.tabu_size) + ').png'
+        figurepath = os.getcwd() + r"\Final report\results"
+        path_filename = os.path.join(figurepath, figurename)
+        # save figure if it does not exist
+        if not os.path.exists(path_filename):
+            plt.savefig(path_filename)
+        if show:
+            plt.show()
+        plt.clf()
 
 
 if __name__ == "__main__":
-    m_iter = 100
-    tb_size = 7
-    folder_location = os.getcwd() + "\mie562_instances"
-    instance_name = "8_12.txt"
-    ts = SingleTrackTS(folder_location, instance_name, max_iter=m_iter, tabu_size=tb_size)
-    start_time = time()
-    ts.solve(verbose=False)
-    solving_time = time() - start_time
-    ts.display_result()
-    print(solving_time)
+    # same maximum iteration and tabu list size for all instances
+    m_iter = 300
+    tb_size = 16
+    strategy = 'best accept'
+
+    # paths and names
+    instances_path = os.getcwd() + r"\Final report\instances"
+    file_dirs = os.listdir(instances_path)
+    results_path = os.getcwd() + r"\Final report\results"
+    # noinspection SpellCheckingInspection
+    xls_name = r"\Results for (" + strategy + ',iter=' + str(m_iter) + ',size=' + str(tb_size) + ').xlsx'
+
+    with xlsxwriter.Workbook(os.path.join(results_path, xls_name)) as workbook:
+        worksheet = workbook.add_worksheet()
+        worksheet.write('A1', 'Instance')
+        worksheet.write('B1', 'Objective value')
+        worksheet.write('C1', 'Time to solve')
+        for i, instance_name in enumerate(file_dirs):
+            ts = SingleTrackTS(instances_path, instance_name, max_iter=m_iter, tabu_size=tb_size, strategy=strategy)
+            ts.solve()
+            # ts.display_result()
+            ts.save_plot()
+            worksheet.write('A' + str(i+2), instance_name[:-4])
+            worksheet.write('B' + str(i+2), getattr(ts, 'best_obj'))
+            worksheet.write('C' + str(i+2), getattr(ts, 'solving_time'))
