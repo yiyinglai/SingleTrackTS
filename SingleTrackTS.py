@@ -6,6 +6,7 @@ from time import time
 import matplotlib.pyplot as plt
 import xlsxwriter
 import numpy as np
+import random
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(linewidth=300)
 
@@ -29,6 +30,9 @@ class SingleTrackTS:
         tabu([move]): A list of moves, where a move (t, i) means swapping A[t, i] and A[t, i+1]
         tabu_size(int): size of tabu list
         obj_his(numpy.ndarray[float]): History of objective values at each iteration
+        filename(str): File name of the instance
+        solving_time_his([float]): History of time points at the end of each iteration
+        time_hit_best(float): Time point when the best objective value is obtained
         num_sta(int): Number of stations of the instance
         num_trn(int): Number of trains of the instance
         num_tot(int): Number of locations of the instance
@@ -52,7 +56,8 @@ class SingleTrackTS:
         self.tabu_size = tabu_size
         self.obj_his = []
         self.filename = file_name
-        self.solving_time = None
+        self.solving_time_his = []
+        self.time_hit_best = 0.0
 
         # read instance
         with open(os.path.join(folder_loc, file_name), "r") as f:
@@ -161,7 +166,11 @@ class SingleTrackTS:
                 candidate_m = []
                 candidate_A = []
                 candidate_obj = []
+
+                # copy moves and shuffle it around
                 moves = copy.deepcopy(self.moves)
+                random.seed(1)
+                random.shuffle(moves)
 
                 for i in range(0, len(moves)):
                     # calculate obj and departures regardless of the legitimacy of the move
@@ -189,12 +198,14 @@ class SingleTrackTS:
                     self.inc_A = copy.deepcopy(A)
                     self.inc_obj, self.inc_departures = copy.deepcopy(self.obj_and_departures(A))
                     self.obj_his.append(self.inc_obj)
+                    self.solving_time_his.append(time() - start_solving)
+                    self.time_hit_best = self.solving_time_his[int(np.argmin(self.obj_his))]
                     # update best solution
                     if self.inc_obj <= self.best_obj:
                         self.best_A = copy.deepcopy(self.inc_A)
                         self.best_obj = copy.deepcopy(self.inc_obj)
                         self.best_departures = copy.deepcopy(self.inc_departures)
-                # no move can be made (when tabu size is greater than neighbour size)
+                # no move can be made (when tabu size is greater than neighbour size), rarely happens
                 else:
                     self.iter -= 1
                     break
@@ -205,7 +216,11 @@ class SingleTrackTS:
                 self.iter += 1
                 pbar.update(1)
 
+                # copy moves and shuffle it around
                 moves = copy.deepcopy(self.moves)
+                random.seed(1)
+                random.shuffle(moves)
+
                 for i in range(0, len(moves)):
                     # calculate obj and departures regardless of the legitimacy of the move
                     _m = moves[i]
@@ -242,9 +257,8 @@ class SingleTrackTS:
                         continue
                 # finished evaluating neighbours of incumbent solution, record incumbent objective value
                 self.obj_his.append(self.inc_obj)
-
-        # finish solving
-        self.solving_time = time() - start_solving
+                self.solving_time_his.append(time() - start_solving)
+                self.time_hit_best = self.solving_time_his[int(np.argmin(self.obj_his))]
         pbar.close()
 
     def display_result(self):
@@ -253,50 +267,74 @@ class SingleTrackTS:
         print("Best solution:\n", self.best_A)
         print("Best departures:\n", self.best_departures)
         print("Best objective value:\n", self.best_obj)
-        print("Solving time:\n", self.solving_time)
+        print("Hit best objective value at:\n", self.time_hit_best, 's')
+        print("Total solving time:\n", self.solving_time_his[-1], 's')
 
     def save_plot(self, show=False):
         """Save the evolution of objective values in a plot."""
+        # plot objective history
         x = np.arange(self.iter, dtype=int)
         plt.plot(x, self.obj_his)
         plt.title(self.filename[:-4] + "(" + self.strategy +
                   ",iter=" + str(self.max_iter) + ",size=" + str(self.tabu_size) + ")")
         plt.xlabel("Iteration")
         plt.ylabel("Objective value")
-        figurename = self.filename[:-4] + "(" + self.strategy + ",iter=" + str(self.max_iter) + ",size=" + str(self.tabu_size) + ').png'
-        figurepath = os.getcwd() + r"\Final report\results"
-        path_filename = os.path.join(figurepath, figurename)
+
+        # highlight best objective value
+        plt.plot([np.argmin(self.obj_his)], [self.best_obj], marker='o', markersize=4, color="red")
+        plt.figtext(np.argmin(self.obj_his), self.best_obj, "best objective value %.2f" % self.best_obj)
+
+        # text description
+        plt.figtext(0.15, 0.8, "Hit best objective value %.2f (at %.2fs)" % (self.best_obj, self.time_hit_best))
+
         # save figure if it does not exist
-        if not os.path.exists(path_filename):
-            plt.savefig(path_filename)
+        figure_name = self.filename[:-4] + "(" + self.strategy + ",iter=" + str(self.max_iter) + ",size=" + str(self.tabu_size) + ').png'
+        figure_path = os.getcwd() + r"\Final report\results"
+        path_filename = os.path.join(figure_path, figure_name)
+        plt.savefig(path_filename)
+
+        # show plot if required
         if show:
             plt.show()
         plt.clf()
 
 
 if __name__ == "__main__":
-    # same maximum iteration and tabu list size for all instances
-    m_iter = 300
-    tb_size = 16
-    strategy = 'best accept'
-
     # paths and names
-    instances_path = os.getcwd() + r"\Final report\instances"
-    file_dirs = os.listdir(instances_path)
-    results_path = os.getcwd() + r"\Final report\results"
-    # noinspection SpellCheckingInspection
-    xls_name = r"Results for (" + strategy + ',iter=' + str(m_iter) + ',size=' + str(tb_size) + ').xlsx'
+    instances_path = os.getcwd() + r"\instances"
+    instances = os.listdir(instances_path)
+    results_path = os.getcwd() + r"\results"
+    results_name = 'results.xlsx'
 
-    with xlsxwriter.Workbook(os.path.join(results_path, xls_name)) as workbook:
-        worksheet = workbook.add_worksheet()
-        worksheet.write('A1', 'Instance')
-        worksheet.write('B1', 'Objective value')
-        worksheet.write('C1', 'Time to solve')
-        for i, instance_name in enumerate(file_dirs):
-            ts = SingleTrackTS(instances_path, instance_name, max_iter=m_iter, tabu_size=tb_size, strategy=strategy)
-            ts.solve()
-            # ts.display_result()
-            ts.save_plot()
-            worksheet.write('A' + str(i+2), instance_name[:-4])
-            worksheet.write('B' + str(i+2), getattr(ts, 'best_obj'))
-            worksheet.write('C' + str(i+2), getattr(ts, 'solving_time'))
+    # try different m_iter and tb_size combination for each instance
+    strategy = 'best accept'
+    m_iter = 500
+
+    with xlsxwriter.Workbook(os.path.join(results_path, results_name)) as workbook:
+        for instance in instances:
+            # one worksheet for each instance
+            worksheet = workbook.add_worksheet(instance[:-4])
+            worksheet.write('A1', 'TS parameters')
+            worksheet.write('B1', 'Best objective value')
+            worksheet.write('C1', 'Time hit best')
+            worksheet.write('D1', 'Total solving time')
+
+            # get number of stations and number of trains
+            num_sta = int(instance[:-4].split('.')[0].split('_')[-2])
+            num_trn = int(instance[:-4].split('.')[0].split('_')[-1])
+            tb_size_min = 6
+            tb_size_max = int(0.2*(num_sta-1)*(num_trn-1))
+            tb_size_step = 2
+
+            for i, tb_size in enumerate(range(tb_size_min, tb_size_max, tb_size_step)):
+                # different parameter for one instance
+                ts = SingleTrackTS(instances_path, instance,
+                                   max_iter=m_iter, tabu_size=tb_size, strategy=strategy)
+                ts.solve()
+                # ts.display_result()
+                ts.save_plot()
+                worksheet.write('A' + str(i+2), strategy + ',' + str(m_iter) + ',' + str(tb_size))
+                worksheet.write('B' + str(i+2), getattr(ts, 'best_obj'))
+                worksheet.write('C' + str(i+2), getattr(ts, 'time_hit_best'))
+                worksheet.write('D' + str(i+2), getattr(ts, 'solving_time_his')[-1])
+                worksheet.set_column(0, 3, 20)
