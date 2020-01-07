@@ -302,39 +302,15 @@ class SingleTrackTS:
 if __name__ == "__main__":
     # paths and names
     instances_path = os.getcwd() + r"\instances"
-    instances = os.listdir(instances_path)
-    results_path = os.getcwd() + r"\results"
-    results_name = 'results.xlsx'
-
-    # try different m_iter and tb_size combination for each instance
-    strategy = 'best accept'
+    instances_name = r"Kitchener_Line_Current_12_16.txt"
+    
+    # parameters
     m_iter = 500
+    tabu_size = 16
+    strategy = 'best accept'
 
-    with xlsxwriter.Workbook(os.path.join(results_path, results_name)) as workbook:
-        for instance in instances:
-            # one worksheet for each instance
-            worksheet = workbook.add_worksheet(instance[:-4])
-            worksheet.write('A1', 'TS parameters')
-            worksheet.write('B1', 'Best objective value')
-            worksheet.write('C1', 'Time hit best')
-            worksheet.write('D1', 'Total solving time')
-
-            # get number of stations and number of trains
-            num_sta = int(instance[:-4].split('.')[0].split('_')[-2])
-            num_trn = int(instance[:-4].split('.')[0].split('_')[-1])
-            tb_size_min = 6
-            tb_size_max = int(0.2*(num_sta-1)*(num_trn-1))
-            tb_size_step = 2
-
-            for i, tb_size in enumerate(range(tb_size_min, tb_size_max, tb_size_step)):
-                # different parameter for one instance
-                ts = SingleTrackTS(instances_path, instance,
-                                   max_iter=m_iter, tabu_size=tb_size, strategy=strategy)
-                ts.solve()
-                # ts.display_result()
-                ts.save_plot()
-                worksheet.write('A' + str(i+2), strategy + ',' + str(m_iter) + ',' + str(tb_size))
-                worksheet.write('B' + str(i+2), getattr(ts, 'best_obj'))
-                worksheet.write('C' + str(i+2), getattr(ts, 'time_hit_best'))
-                worksheet.write('D' + str(i+2), getattr(ts, 'solving_time_his')[-1])
-                worksheet.set_column(0, 3, 20)
+    # solve instance, save the plot of objective value evolution
+    ts = SingleTrackTS(instances_path, instance_name, max_iter=m_iter, tabu_size=tb_size, strategy=strategy)
+    ts.solve()
+#     ts.display_result()
+    ts.save_plot()
