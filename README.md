@@ -1,8 +1,8 @@
 # SingleTrackTS
-A Tabu search algorithm for solving single track scheduling problem.
+A Tabu search algorithm for solving one-way-single-track scheduling problem.
 
 Problem Setup:
-There is a one-way-single-track system that trains can travel on. When a train departs at a station, it enters that stations and stops for some time. When a train departs at a segment, it enters the segment and travels to the next station.
+A brief description of a one-way-single-trakc system. When a train departs at a station, it enters that stations and stops for some time. When a train departs at a segment, it enters the segment and travels to the next station.
 
 Each train stops at each station for a certain amount of time ideally, and travels between two stations using a certain amount of time. Ideal departure times at each segment are given and the travel times between two stations are also given.
 
